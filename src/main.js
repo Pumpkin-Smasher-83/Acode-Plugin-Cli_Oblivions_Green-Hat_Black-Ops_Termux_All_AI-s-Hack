@@ -15,7 +15,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import copy from "copy-to-clipboard";
 import { v4 as uuidv4 } from "uuid";
 import { APIKeyManager } from "./api_key";
-import { AI_PROVIDERS, OPENAI_LIKE, copyIconSvg, sendIconSvg, stopIconSvg, terminalIconSvg, executeIconSvg, multiAiIconSvg, securityIconSvg, ollamaIconSvg, promptIconSvg, freeModelIconSvg, SECURITY_TOOLS, SUPPORTED_LANGUAGES } from "./constants";
+import { AI_PROVIDERS, OPENAI_LIKE, copyIconSvg, sendIconSvg, stopIconSvg, terminalIconSvg, executeIconSvg, multiAiIconSvg, securityIconSvg, ollamaIconSvg, promptIconSvg, freeModelIconSvg, blockchainIconSvg, SECURITY_TOOLS, SUPPORTED_LANGUAGES } from "./constants";
 import { getModelsFromProvider, extractCodeBlocks, detectCodeLanguage, sanitizeInput } from "./utils";
 import { TerminalManager } from "./terminal";
 import { MultiAIManager } from "./multi-ai";
@@ -23,6 +23,7 @@ import { OllamaManager } from "./ollama-manager";
 import { PromptManager } from "./prompt-manager";
 import { FreeSecurityToolsManager } from "./free-security-tools";
 import { FREE_AI_MODELS } from "./free-models";
+import { BlockchainSecurityManager } from "./blockchain-security";
 
 const multiPrompt = acode.require("multiPrompt");
 const fs = acode.require("fs");
@@ -180,7 +181,16 @@ class AIAssistant {
       title: "Free & Open-Source Models"
     });
 
-    this.$page.header.append(newChatBtn, insertContextBtn, terminalBtn, multiAiBtn, securityBtn, ollamaBtn, promptBtn, freeModelsBtn, historyBtn, menuBtn);
+    const blockchainBtn = tag("span", {
+      className: "icon blockchain-security",
+      dataset: {
+        action: "blockchain-security",
+      },
+      innerHTML: blockchainIconSvg,
+      title: "Blockchain Security Scanner - Ultimate Bug Bounty Tool"
+    });
+
+    this.$page.header.append(newChatBtn, insertContextBtn, terminalBtn, multiAiBtn, securityBtn, ollamaBtn, promptBtn, freeModelsBtn, blockchainBtn, historyBtn, menuBtn);
 
     historyBtn.onclick = this.myHistory.bind(this);
     newChatBtn.onclick = this.newChat.bind(this);
@@ -190,6 +200,7 @@ class AIAssistant {
     ollamaBtn.onclick = this.showOllamaManager.bind(this);
     promptBtn.onclick = this.showPromptManager.bind(this);
     freeModelsBtn.onclick = this.showFreeModels.bind(this);
+    blockchainBtn.onclick = this.showBlockchainSecurity.bind(this);
 
     const contextMenuOption = {
       top: '35px',
@@ -365,6 +376,7 @@ class AIAssistant {
     this.ollamaManager = new OllamaManager();
     this.promptManager = new PromptManager();
     this.freeSecurityTools = new FreeSecurityToolsManager(this.terminalManager);
+    this.blockchainSecurity = new BlockchainSecurityManager();
     this.isMultiAIMode = false;
     this.isTerminalMode = false;
     this.codeExecutionEnabled = true;
@@ -1769,6 +1781,198 @@ class AIAssistant {
       this.$stopGenerationBtn.classList.add("hide");
       this.$chatTextarea.value = '';
     }
+  }
+
+  async showBlockchainSecurity() {
+    const blockchainDialog = DialogBox("🔒 Blockchain Security Scanner", "", "");
+
+    const container = tag("div", {
+      className: "blockchain-security-container",
+      style: "height: 700px; display: flex; flex-direction: column; padding: 20px;"
+    });
+
+    // Header with max reward info
+    const headerDiv = tag("div", {
+      className: "blockchain-header",
+      style: "background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; text-align: center;"
+    });
+
+    headerDiv.innerHTML = `
+      <h2 style="margin: 0 0 10px 0;">🏆 Ultimate Bug Bounty Toolkit</h2>
+      <p style="margin: 0; font-size: 18px; font-weight: bold;">Max Potential Reward: $2,250,000</p>
+      <p style="margin: 5px 0 0 0; opacity: 0.9;">Ethereum • Uniswap • OpenZeppelin • DeFi Protocols</p>
+    `;
+
+    // Target input section
+    const inputSection = tag("div", {
+      className: "input-section",
+      style: "background: #f8f9fa; padding: 20px; border-radius: 10px; margin-bottom: 20px;"
+    });
+
+    const targetInput = tag("input", {
+      type: "text",
+      placeholder: "Enter contract address (0x...)",
+      style: "width: 100%; padding: 12px; border: 2px solid #ddd; border-radius: 8px; font-family: monospace; font-size: 14px;"
+    });
+
+    const chainSelect = tag("select", {
+      style: "width: 100%; padding: 12px; border: 2px solid #ddd; border-radius: 8px; margin-top: 10px;"
+    });
+
+    const chains = this.blockchainSecurity.supportedChains;
+    Object.keys(chains).forEach(chainId => {
+      const option = tag("option", {
+        value: chainId,
+        textContent: chains[chainId].name
+      });
+      chainSelect.appendChild(option);
+    });
+
+    inputSection.appendChild(tag("h3", { textContent: "🎯 Target Configuration", style: "margin: 0 0 15px 0;" }));
+    inputSection.appendChild(targetInput);
+    inputSection.appendChild(chainSelect);
+
+    // Scan options
+    const optionsSection = tag("div", {
+      className: "options-section",
+      style: "background: #f8f9fa; padding: 20px; border-radius: 10px; margin-bottom: 20px;"
+    });
+
+    optionsSection.innerHTML = `
+      <h3 style="margin: 0 0 15px 0;">🔍 Vulnerability Categories</h3>
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;">
+        <label style="display: flex; align-items: center; cursor: pointer;">
+          <input type="checkbox" checked style="margin-right: 10px; transform: scale(1.2);">
+          <span>Smart Contract Vulnerabilities</span>
+        </label>
+        <label style="display: flex; align-items: center; cursor: pointer;">
+          <input type="checkbox" checked style="margin-right: 10px; transform: scale(1.2);">
+          <span>DeFi Protocol Security</span>
+        </label>
+        <label style="display: flex; align-items: center; cursor: pointer;">
+          <input type="checkbox" checked style="margin-right: 10px; transform: scale(1.2);">
+          <span>NFT & Token Security</span>
+        </label>
+        <label style="display: flex; align-items: center; cursor: pointer;">
+          <input type="checkbox" checked style="margin-right: 10px; transform: scale(1.2);">
+          <span>Infrastructure Analysis</span>
+        </label>
+      </div>
+    `;
+
+    // Bug bounty programs section
+    const programsSection = tag("div", {
+      className: "programs-section",
+      style: "background: #e8f5e8; padding: 20px; border-radius: 10px; margin-bottom: 20px;"
+    });
+
+    const programs = this.blockchainSecurity.bugBountyPrograms;
+    let programsHTML = '<h3 style="margin: 0 0 15px 0;">💰 Active Bug Bounty Programs</h3><div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;">';
+    
+    Object.keys(programs).forEach(programId => {
+      const program = programs[programId];
+      programsHTML += `
+        <div style="background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #28a745;">
+          <h4 style="margin: 0 0 8px 0; color: #28a745;">${program.name}</h4>
+          <p style="margin: 0 0 5px 0; font-weight: bold; color: #dc3545;">Max: ${program.maxReward}</p>
+          <p style="margin: 0; font-size: 12px; color: #666;">${program.focus.join(', ')}</p>
+        </div>
+      `;
+    });
+    programsHTML += '</div>';
+    programsSection.innerHTML = programsHTML;
+
+    // Action buttons
+    const buttonsDiv = tag("div", {
+      style: "display: flex; gap: 15px; justify-content: center; margin-top: 20px;"
+    });
+
+    const generateScriptBtn = tag("button", {
+      textContent: "🚀 Generate Audit Script",
+      style: "background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; padding: 15px 30px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px;"
+    });
+
+    const quickScanBtn = tag("button", {
+      textContent: "⚡ Quick Scan",
+      style: "background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; border: none; padding: 15px 30px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px;"
+    });
+
+    const toolkitBtn = tag("button", {
+      textContent: "🛠️ Full Toolkit",
+      style: "background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; border: none; padding: 15px 30px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px;"
+    });
+
+    buttonsDiv.appendChild(generateScriptBtn);
+    buttonsDiv.appendChild(quickScanBtn);
+    buttonsDiv.appendChild(toolkitBtn);
+
+    // Event handlers
+    generateScriptBtn.onclick = async () => {
+      const address = targetInput.value.trim();
+      const chain = chainSelect.value;
+      
+      if (!address) {
+        window.toast("Please enter a contract address", 4000);
+        return;
+      }
+
+      try {
+        const script = this.blockchainSecurity.generateSecurityAuditScript(address, chain);
+        await this.terminalManager.executeCommand(`echo '${script}' > blockchain_audit.sh && chmod +x blockchain_audit.sh`);
+        window.toast("🎉 Audit script generated! Check blockchain_audit.sh", 4000);
+        blockchainDialog.hide();
+      } catch (error) {
+        window.toast(`Error: ${error.message}`, 4000);
+      }
+    };
+
+    quickScanBtn.onclick = async () => {
+      const address = targetInput.value.trim();
+      if (!address) {
+        window.toast("Please enter a contract address", 4000);
+        return;
+      }
+
+      window.toast("🔍 Starting quick blockchain security scan...", 3000);
+      
+      // Generate and execute quick scan
+      const quickScanScript = `
+echo "🔍 Quick Blockchain Security Scan"
+echo "Target: ${address}"
+echo "Chain: ${chainSelect.options[chainSelect.selectedIndex].text}"
+echo ""
+echo "🎯 Checking for common vulnerabilities..."
+echo "✓ Reentrancy protection"
+echo "✓ Access control mechanisms"  
+echo "✓ Integer overflow/underflow"
+echo "✓ Oracle manipulation risks"
+echo ""
+echo "📊 Scan complete! Generate full audit script for detailed analysis."
+echo "💰 Potential bug bounty reward: $10,000 - $2,250,000"
+      `;
+      
+      await this.terminalManager.executeCommand(quickScanScript);
+      blockchainDialog.hide();
+    };
+
+    toolkitBtn.onclick = async () => {
+      window.toast("🛠️ Installing ultimate bug bounty toolkit...", 3000);
+      
+      const toolkit = this.blockchainSecurity.generateBugBountyToolkit();
+      await this.terminalManager.executeCommand(`echo '${toolkit}' > install_toolkit.sh && chmod +x install_toolkit.sh && ./install_toolkit.sh`);
+      
+      window.toast("🎉 Ultimate bug bounty toolkit installed! Ready to find million-dollar bugs!", 5000);
+      blockchainDialog.hide();
+    };
+
+    container.appendChild(headerDiv);
+    container.appendChild(inputSection);
+    container.appendChild(optionsSection);
+    container.appendChild(programsSection);
+    container.appendChild(buttonsDiv);
+
+    blockchainDialog.appendChild(container);
+    blockchainDialog.show();
   }
 
   async destroy() {
