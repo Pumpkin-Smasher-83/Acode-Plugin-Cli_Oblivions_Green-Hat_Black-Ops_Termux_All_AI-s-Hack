@@ -1,8 +1,8 @@
 {
   "id": "acode.plugin.chatgpt",
-  "name": "AI Assistant Beta",
+  "name": "Oblivions Green-Hat Ai-Chats & Ai-Hacks",
   "main": "dist/main.js",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "readme": "readme.md",
   "icon": "icon.png",
   "minVersionCode": 290,
@@ -16,8 +16,8 @@
   ],
   "price": 0,
   "author": {
-    "name": "Raunak",
-    "email": "bajrangcoders@gmail.com",
-    "github": "bajrangCoder"
+    "name": "Loophole & Oblivions AI-Apps",
+    "email": "Ai-Green-Hat@Hotmail.com; OblivionHackerbot@gmail.com; The_Real@Oblivion-hacker-bot.net",
+    "github": "Pumpkin-Smasher-83"
   }
 }
