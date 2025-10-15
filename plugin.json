@@ -1,5 +1,5 @@
 {
-  "id": "acode.plugin.chatgpt",
+  "Original.id": "acode.plugin.chatgpt",
   "name": "Acode-Plugin-Cli_Oblivions_Green-Hat_Black-Ops_Termux_All_AI-s-Hack",
   "main": "dist/main.js",
   "version": "1.0.0",
@@ -12,11 +12,16 @@
     "assets/insert-context.svg",
     "assets/github-dark.css",
     "assets/highlight.min.js",
-    "assets/markdown-it.min.js"
+    "assets/markdown-it.min.js",
+    "BUG_BOUNTY_GUIDE.md",
+    "ENHANCED_FEATURES.md",
+    "IMPLEMENTATION_SUMMARY.md",
+    "TESTING_GUIDE.md",
   ],
   "price": 0,
   "author": {
     "name": "Loophole & Oblivions AI-Apps",
+    "name": "Kolbye Scott Worrell",
     "email": "Ai-Green-Hat@Hotmail.com; OblivionHackerbot@gmail.com; The_Real@Oblivion-hacker-bot.net",
     "github": "Pumpkin-Smasher-83"
   }
