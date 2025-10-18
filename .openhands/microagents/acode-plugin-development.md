@@ -115,15 +115,30 @@ class SecurityToolsManager {
   }
 
   buildSecurityCommand(tool, target, options) {
-    // Build secure command with proper escaping
+    // Validate and securely quote target to prevent command injection
+    const safeTarget = this.validateTarget(target);
     switch(tool) {
       case 'nmap':
-        return `nmap -sV -sC ${target}`;
+        return `nmap -sV -sC "${safeTarget}"`;
       case 'sqlmap':
-        return `sqlmap -u "${target}" --batch --risk=1 --level=1`;
+        return `sqlmap -u "${safeTarget}" --batch --risk=1 --level=1`;
       default:
-        return `${this.tools[tool]} ${target}`;
+        return `${this.tools[tool]} "${safeTarget}"`;
     }
+
+  }
+
+  // Validate target (domain, IP, or URL) using regex, throw error if invalid
+  validateTarget(target) {
+    // Accept IPv4, IPv6, domain, or URL (basic check)
+    const ipv4 = /^(?:\d{1,3}\.){3}\d{1,3}$/;
+    const ipv6 = /^([a-fA-F0-9:]+)$/;
+    const domain = /^(?!-)[A-Za-z0-9-]{1,63}(?<!-)\.(?:[A-Za-z]{2,6})$/;
+    const url = /^(https?:\/\/)[^\s/$.?#].[^\s]*$/i;
+    if (ipv4.test(target) || ipv6.test(target) || domain.test(target) || url.test(target)) {
+      return target.replace(/"/g, '\\"'); // Escape double quotes
+    }
+    throw new Error('Invalid target format');
   }
 }
 ```
