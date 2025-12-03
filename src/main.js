@@ -1,3 +1,352 @@
+// Oblivion Acode plugin - Ollama-first Multi-AI Orchestrator
+// - Ollama is treated as the primary synthesizer (local or remote Ollama HTTP API).
+// - Other AI providers are queried in parallel (via Termux bridge or direct HTTP).
+// - Responses from other AIs are fed into Ollama for final synthesis (consensus).
+// - Termux bridge is used to run CLI tools, run code, and perform uploads to user-chosen cloud.
+// - Important: Security tools require explicit authorization confirmation before running.
+//
+// NOTE: This is a scaffold/orchestrator. Heavy AI SDKs, native modules, and CLI binaries run
+// in Termux (termux/bridge.js) or on a remote server. Do NOT commit API keys. Store keys with
+// the plugin's encrypted storage UI or in Termux env vars.
+//
+// Replace or extend provider adapters in bridge.js as needed.
+//
+// Commands registered:
+// - oblivion:set-key           -> store encrypted API key for provider
+// - oblivion:configure-ollama  -> set Ollama host (http://host:port) and model
+// - oblivion:multiask         -> ask a question, gather providers, synthesize in Ollama
+// - oblivion:run-cmd          -> run an authorized command in Termux (requires authorization)
+// - oblivion:run-code         -> run code (file) in Termux and return output
+// - oblivion:upload-to-cloud  -> upload a file to configured cloud (rclone/aws/s3/etc)
+//
+// Usage: install the plugin zip in Acode developer mode and set up the termux bridge per README.
+
+(async function () {
+  // Basic environment checks
+  try {
+    if (typeof acode === 'undefined' || !acode.require) {
+      console.error('Not running in Acode plugin context.');
+      return;
+    }
+  } catch (e) {
+    console.error('Acode not available:', e);
+    return;
+  }
+
+  const terminal = acode.require('terminal');
+  const storage = (acode.plugins && acode.plugins.storage) ? acode.plugins.storage : null;
+  if (!storage) acode.toast('Plugin storage not available; API key persistence may not work.');
+
+  // ---------- Utilities: crypto for encrypted API key storage ----------
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+
+  async function deriveKey(passphrase, salt) {
+    const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 120000, hash: 'SHA-256' }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+
+  function toB64(u8) { return btoa(String.fromCharCode(...u8)); }
+  function fromB64(s) { return Uint8Array.from(atob(s), c => c.charCodeAt(0)); }
+
+  async function encryptText(passphrase, text) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveKey(passphrase, salt);
+    const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(text));
+    return { salt: toB64(salt), iv: toB64(iv), data: toB64(new Uint8Array(cipher)) };
+  }
+
+  async function decryptText(passphrase, payload) {
+    const salt = fromB64(payload.salt);
+    const iv = fromB64(payload.iv);
+    const data = fromB64(payload.data);
+    const key = await deriveKey(passphrase, salt);
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+    return dec.decode(plain);
+  }
+
+  function saveEncrypted(provider, payload) {
+    if (!storage) return false;
+    storage.set(`oblivion_api_${provider}`, JSON.stringify(payload));
+    return true;
+  }
+
+  function loadEncrypted(provider) {
+    if (!storage) return null;
+    const v = storage.get(`oblivion_api_${provider}`);
+    return v ? JSON.parse(v) : null;
+  }
+
+  // ---------- Plugin settings/state ----------
+  const PLUGIN_STATE_KEY = 'oblivion_state_v1';
+  function saveState(obj) { if (storage) storage.set(PLUGIN_STATE_KEY, JSON.stringify(obj)); }
+  function loadState() { if (storage) { const v = storage.get(PLUGIN_STATE_KEY); return v ? JSON.parse(v) : {}; } return {}; }
+
+  let state = loadState();
+  state.ollama = state.ollama || { host: 'http://127.0.0.1:11434', model: 'lly-ollama' };
+  state.bridge = state.bridge || { url: 'http://127.0.0.1:8765', token: '' };
+  saveState(state);
+
+  // ---------- Termux bridge helpers ----------
+  async function bridgePost(path, body) {
+    const url = (state.bridge.url || 'http://127.0.0.1:8765') + path;
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({}, body, { token: state.bridge.token }))
+      });
+      return res.json();
+    } catch (e) {
+      console.error('Bridge request failed', e);
+      throw e;
+    }
+  }
+
+  // Exec a shell command via bridge; bridge must implement /exec
+  async function bridgeExec(cmd, args = []) {
+    const resp = await bridgePost('/exec', { cmd, args });
+    return resp;
+  }
+
+  // Call a third-party AI via bridge: bridge must implement /ai/call
+  async function bridgeAICall(provider, input) {
+    const resp = await bridgePost('/ai/call', { provider, input });
+    return resp;
+  }
+
+  // ---------- Ollama interaction ----------
+  // Query Ollama HTTP API (local or remote) - expects Ollama API endpoint /api/generate or /v1/ completions depending on version
+  async function callOllama(prompt, model = state.ollama.model, options = {}) {
+    const host = state.ollama.host;
+    // Ollama usually exposes POST /api/generate with {model, prompt}. Adjust if your Ollama differs.
+    const body = { model, prompt, ...options };
+    try {
+      const res = await fetch(`${host}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Ollama error: ${res.status} ${text}`);
+      }
+      const json = await res.json();
+      // Many Ollama responses stream; this scaffold assumes standard JSON with text at json.result[0].content or json.output.
+      if (json?.result && Array.isArray(json.result) && json.result[0]?.content) return json.result[0].content;
+      if (json?.output) return typeof json.output === 'string' ? json.output : JSON.stringify(json.output);
+      return JSON.stringify(json);
+    } catch (e) {
+      console.error('callOllama failed', e);
+      throw e;
+    }
+  }
+
+  // ---------- Multi-AI orchestration ----------
+  // providers: array of provider ids (e.g., ['openai','anthropic','cohere'])
+  // For each provider, attempt to call via bridge; if bridge unavailable you can extend this to direct calls.
+  async function gatherProviderResponses(prompt, providers = []) {
+    const tasks = providers.map(async (prov) => {
+      try {
+        // Prefer bridge to do provider calls (safer to keep keys in Termux or server)
+        const r = await bridgeAICall(prov, { prompt });
+        return { provider: prov, success: true, response: r };
+      } catch (e) {
+        return { provider: prov, success: false, error: e.message || String(e) };
+      }
+    });
+    return Promise.all(tasks);
+  }
+
+  // Ask function: gather responses then ask Ollama to synthesize into final answer
+  async function askWithConsensus(prompt, providers = ['openai', 'anthropic']) {
+    acode.toast('Asking providers: ' + providers.join(', '));
+    let gathered = [];
+    try {
+      gathered = await gatherProviderResponses(prompt, providers);
+    } catch (e) {
+      acode.toast('Error gathering provider responses: ' + e.message);
+    }
+
+    // Build a combined prompt for Ollama: include original question + provider outputs
+    let combined = `You are the primary assistant. A user asked:\n\n${prompt}\n\nYou have collected the following responses from multiple AI providers. Provide a consolidated, prioritized answer, explain differences, and recommend best next steps. Be concise and list commands to run if applicable.\n\nProvider responses:\n`;
+    gathered.forEach((g) => {
+      if (g.success) {
+        combined += `\n---\nProvider: ${g.provider}\nResponse:\n${typeof g.response === 'object' ? JSON.stringify(g.response, null, 2) : g.response}\n`;
+      } else {
+        combined += `\n---\nProvider: ${g.provider}\nError: ${g.error}\n`;
+      }
+    });
+
+    // Ask Ollama to synthesize
+    const ollamaResp = await callOllama(combined);
+    return { ollama: ollamaResp, gathered };
+  }
+
+  // ---------- Safety: explicit authorization check for security actions ----------
+  async function confirmAuthorized(target) {
+    // Forces user to type a specific phrase to confirm authorization to test the target.
+    const prompt = `You must confirm you have explicit authorization to test ${target}. Type the exact phrase:\nI HAVE AUTHORIZATION TO TEST ${target}`;
+    const resp = await acode.prompt(prompt, '');
+    const want = `I HAVE AUTHORIZATION TO TEST ${target}`;
+    return resp === want;
+  }
+
+  // ---------- High-level actions ----------
+
+  acode.commands.register('oblivion:set-key', async () => {
+    const provider = (await acode.prompt('Provider name (e.g. openai):', 'openai')) || '';
+    if (!provider) return;
+    const pass = await acode.prompt('Enter passphrase to encrypt the API key (do not forget this):', '');
+    if (!pass) { acode.toast('Passphrase required'); return; }
+    const key = await acode.prompt(`Enter API key for ${provider}:`, '');
+    if (!key) { acode.toast('No key entered'); return; }
+    const payload = await encryptText(pass, key.trim());
+    saveEncrypted(provider, payload);
+    acode.toast(`${provider} key saved (encrypted).`);
+  });
+
+  acode.commands.register('oblivion:configure-ollama', async () => {
+    const host = await acode.prompt('Ollama host (http://host:port):', state.ollama.host || 'http://127.0.0.1:11434');
+    const model = await acode.prompt('Ollama model name:', state.ollama.model || 'lly-ollama');
+    state.ollama.host = host || state.ollama.host;
+    state.ollama.model = model || state.ollama.model;
+    saveState(state);
+    acode.toast('Ollama configured: ' + state.ollama.host + ' model:' + state.ollama.model);
+  });
+
+  acode.commands.register('oblivion:configure-bridge', async () => {
+    const url = await acode.prompt('Termux bridge URL (http://127.0.0.1:8765):', state.bridge.url || 'http://127.0.0.1:8765');
+    const token = await acode.prompt('Termux bridge token (BRIDGE_TOKEN):', state.bridge.token || '');
+    state.bridge.url = url || state.bridge.url;
+    state.bridge.token = token || state.bridge.token;
+    saveState(state);
+    acode.toast('Bridge configured.');
+  });
+
+  acode.commands.register('oblivion:multiask', async () => {
+    const prompt = await acode.prompt('Enter question for multi-AI consensus:', '');
+    if (!prompt) return;
+    // Ask user to list providers to query (comma separated)
+    const pList = await acode.prompt('Providers to query (comma separated, e.g. openai,anthropic,cohere). Leave empty for default:', 'openai,anthropic');
+    const providers = pList ? pList.split(',').map(s => s.trim()).filter(Boolean) : ['openai', 'anthropic'];
+    acode.toast('Gathering provider responses...');
+    try {
+      const result = await askWithConsensus(prompt, providers);
+      // Show result in a simple panel
+      const html = `<div style="padding:12px"><h3>Ollama synthesis</h3><pre style="white-space:pre-wrap">${escapeHtml(result.ollama)}</pre><h4>Provider details</h4><pre style="white-space:pre-wrap">${escapeHtml(JSON.stringify(result.gathered, null, 2))}</pre></div>`;
+      acode.panel.create('Oblivion: Answer', html, { icon: 'icons/icon48.png' });
+      acode.toast('Consensus ready.');
+    } catch (e) {
+      acode.toast('Error during multiask: ' + e.message);
+    }
+  });
+
+  acode.commands.register('oblivion:run-cmd', async () => {
+    const target = await acode.prompt('Target/Scope being tested (for authorization tracking):', '');
+    if (!target) return;
+    const ok = await confirmAuthorized(target);
+    if (!ok) { acode.toast('Authorization not confirmed. Aborting.'); return; }
+    const cmd = await acode.prompt('Command to run in Termux (e.g., nmap -A 1.2.3.4):', '');
+    if (!cmd) return;
+    try {
+      // We prefer bridge Exec to get stdout; if bridge not available, fallback to opening a Termux terminal session
+      try {
+        const resp = await bridgeExec('sh', ['-c', cmd]);
+        acode.panel.create('Oblivion: Cmd Output', `<pre style="white-space:pre-wrap">${escapeHtml(resp.stdout || resp)}</pre>`, { icon: 'icons/icon48.png' });
+      } catch (e) {
+        // fallback
+        const session = await terminal.createServer({ name: 'Oblivion-Cmd' });
+        terminal.write(session.id, cmd + '\r');
+        acode.toast('Command sent to Termux interactive session.');
+      }
+    } catch (e) {
+      acode.toast('Failed to run command: ' + e.message);
+    }
+  });
+
+  acode.commands.register('oblivion:run-code', async () => {
+    const lang = await acode.prompt('Language or runtime (bash, python, node, go):', 'bash');
+    const code = await acode.editor.getValue();
+    if (!code) { acode.toast('Open a file in editor to run its code, or paste code into the editor.'); return; }
+    // Save editor content to a temp file in Acode workspace, then send path to Termux via bridge or open terminal and run.
+    // Best method: use bridge to write file and execute it; bridge must support /file/write and /exec OR use terminal to echo > file.
+    const filename = await acode.prompt('Remote filename to create in Termux (e.g., /data/data/com.termux/files/home/tmp/run.sh):', `/data/data/com.termux/files/home/oblivion_run.${lang}`);
+    if (!filename) return;
+    try {
+      // Prefer bridge file write if available
+      try {
+        await bridgePost('/file/write', { path: filename, content: code });
+        const runCmd = runtimeCommandForLang(lang, filename);
+        const resp = await bridgeExec('sh', ['-c', runCmd]);
+        acode.panel.create('Oblivion: Run Output', `<pre style="white-space:pre-wrap">${escapeHtml(resp.stdout || resp)}</pre>`, { icon: 'icons/icon48.png' });
+      } catch (e) {
+        // Fallback: create terminal session and pipe content via heredoc, then run
+        const session = await terminal.createServer({ name: 'Oblivion-Run' });
+        // Minimal approach: write via echo (may break for complex content)
+        terminal.write(session.id, `cat > "${filename}" <<'EOF'\r`);
+        // send code lines
+        const lines = code.split(/\r?\n/);
+        for (const L of lines) {
+          terminal.write(session.id, L.replace(/\r/g, '') + '\r');
+        }
+        terminal.write(session.id, 'EOF\r');
+        const runCmd = runtimeCommandForLang(lang, filename);
+        terminal.write(session.id, runCmd + '\r');
+        acode.toast('Sent code to Termux terminal. See terminal output.');
+      }
+    } catch (e) {
+      acode.toast('Error running code: ' + e.message);
+    }
+  });
+
+  acode.commands.register('oblivion:upload-to-cloud', async () => {
+    const dst = await acode.prompt('Cloud adapter (e.g., s3, rclone, gdrive):', 's3');
+    const localPath = await acode.prompt('Local path in Termux to upload:', '/data/data/com.termux/files/home/oblivion_run.output');
+    if (!localPath) return;
+    try {
+      // Use bridge to upload; bridge must implement /storage/upload
+      const resp = await bridgePost('/storage/upload', { adapter: dst, path: localPath });
+      acode.panel.create('Oblivion: Upload', `<pre>${escapeHtml(JSON.stringify(resp, null, 2))}</pre>`, { icon: 'icons/icon48.png' });
+      acode.toast('Upload attempted; check output panel.');
+    } catch (e) {
+      acode.toast('Upload failed: ' + e.message);
+    }
+  });
+
+  // ---------- Helpers ----------
+  function runtimeCommandForLang(lang, path) {
+    lang = (lang || '').toLowerCase();
+    switch (lang) {
+      case 'python': return `python "${path}"`;
+      case 'node': return `node "${path}"`;
+      case 'bash':
+      case 'sh': return `bash "${path}"`;
+      case 'go': return `go run "${path}"`;
+      default: return `bash "${path}"`;
+    }
+  }
+
+  function escapeHtml(s) {
+    if (!s) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // Provide a simple entry panel
+  acode.panel.create('Oblivion', `<div style="padding:12px">
+    <h3>Oblivion: Ollama-first AI Orchestrator</h3>
+    <p>Use commands: oblivion:configure-ollama, oblivion:configure-bridge, oblivion:set-key, oblivion:multiask, oblivion:run-cmd, oblivion:run-code.</p>
+    <p style="color:crimson"><strong>Security:</strong> only test targets you have written authorization for. You will be asked to confirm before running scans.</p>
+  </div>`, { icon: 'icons/icon48.png' });
+
+  acode.toast('Oblivion plugin (Ollama-first) initialized.');
+})();
 import plugin from "../plugin.json";
 import style from "./style.scss";
 
